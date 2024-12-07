@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import multer from "multer";
 import path from "node:path";
 import nodemailer from "nodemailer";
+import dotenv from 'dotenv'
+dotenv.config();
 
 const app = express();
 const server = createServer(app);
