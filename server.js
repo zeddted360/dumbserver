@@ -1,52 +1,43 @@
 import express from "express";
-import { createServer } from "node:http";
 import { Server } from "socket.io";
 import mongoose from "mongoose";
 import { userModel, conversationModel, messageModel } from "./schema.js";
 import cors from "cors";
 import morgan from "morgan";
-import { randomUUID } from "node:crypto";
-import multer from "multer";
-import path from "node:path";
 import nodemailer from "nodemailer";
-import dotenv from 'dotenv'
+import dotenv from "dotenv";
+
+// Load environment variables
 dotenv.config();
 
 const app = express();
-const server = createServer(app);
-const io = new Server(server, {
+
+// Initialize Socket.IO
+const io = new Server({
   cors: {
-    origin: "http://localhost:3000",
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
   },
 });
 
-const uri =  process.env.MONGOURI 
-const port = process.env.PORT;
-const adminUsername = process.env.ADMIN;
-
-app.use(express.json());
-app.use("/uploads", express.static("uploads"));
-app.use(cors({}));
-app.use(morgan("dev"));
-
+// Connect to MongoDB
 mongoose
-  .connect(uri)
+  .connect(process.env.MONGOURI)
   .then(() => console.log(`connected to the database`))
   .catch((err) => console.error(err.message));
 
-const storage = multer.diskStorage({
-  destination: "./uploads/",
-  filename: (req, file, cb) => {
-    const uniqueName = `${randomUUID()}_${Date.now()}${path.extname(
-      file.originalname
-    )}`;
-    cb(null, uniqueName);
-  },
-});
+// Middleware
+app.use(express.json());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true,
+  })
+);
+app.use(morgan("dev"));
 
-const upload = multer({ storage });
-
+// Email configuration
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -55,11 +46,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-
-app.get('/', (req, res) => {
-  res.status(200).json({message:'server running'});
-})
-
+// Routes
 app.get("/alert", async (req, res) => {
   try {
     const info = await transporter.sendMail({
@@ -76,46 +63,35 @@ app.get("/alert", async (req, res) => {
   }
 });
 
-app.post("/api/upload", upload.single("file"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
-  }
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({ fileUrl });
-});
-
-// add new user
+// User routes
 app.post("/api/user", async (req, res) => {
   const { username } = req.body;
   try {
     const existUser = await userModel.findOne({ username });
     if (existUser) {
-      res.status(409).json({ message: "ID already in use" });
-      return;
+      return res.status(409).json({ message: "ID already in use" });
     }
     const newUser = await userModel.create({ username });
     res.status(201).json({ message: newUser });
   } catch (error) {
-    res.status(500).json({ mesaage: "Internal server error" });
-    console.log(error.message);
+    console.error(error.message);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
-// get all users
+
 app.get("/api/users", async (req, res) => {
   try {
     const users = await userModel.find({});
     res.status(200).json({ message: users });
   } catch (error) {
-    res.status(500).json({ mesaage: "Internal server error" });
     console.error(error.message);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
-// get a conversation if non create it
 app.get("/api/conversations/:username", async (req, res) => {
   const { username } = req.params;
-  const User1 = username.split("_")[0];
-  const User2 = username.split("_")[1];
+  const [User1, User2] = username.split("_");
   try {
     const conversations = await conversationModel.find({
       participants: { $all: [User1, User2] },
@@ -133,41 +109,47 @@ app.get("/api/conversations/:username", async (req, res) => {
   }
 });
 
-// get messages from a conversation
 app.get("/api/messages/:conversationId", async (req, res) => {
   const { conversationId } = req.params;
   try {
-    const result = await messageModel.find({ conversationId });
-    if (result && result.length > 0) {
-      res.status(200).json({ message: result });
+    const messages = await messageModel.find({ conversationId });
+    if (messages.length > 0) {
+      res.status(200).json({ message: messages });
     } else {
       res.status(404).json({ message: "No open conversation yet" });
     }
   } catch (error) {
-    console.log(error.message);
-    res.status(500).json({ message: "Error: Internal server error" });
+    console.error(error.message);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
+// Socket.IO event handlers
 io.on("connection", (socket) => {
+  console.log("New client connected:", socket.id);
+
   socket.on("updateUser", async ({ socketId, username }) => {
-    if (socketId && username) {
-      const updatedUser = await userModel.findOneAndUpdate(
-        { username },
-        {
-          socketId,
-          onlineStatus: true,
-          isAdmin: username === "xxxDark" ? true : false,
-        },
-        { new: true }
-      );
-      console.log('the current updated user is :',updatedUser)
+    try {
+      if (socketId && username) {
+        const updatedUser = await userModel.findOneAndUpdate(
+          { username },
+          {
+            socketId,
+            onlineStatus: true,
+            isAdmin: username === process.env.ADMIN_USERNAME,
+          },
+          { new: true }
+        );
+        console.log("User updated:", updatedUser);
+      }
+    } catch (error) {
+      console.error("Error updating user:", error);
     }
   });
 
   socket.on(
     "chat-message",
-    async ({ sender, receiver, content, conversationId, fileUrl }) => {
+    async ({ sender, receiver, content, conversationId }) => {
       try {
         const newMessage = new messageModel({
           content,
@@ -175,13 +157,12 @@ io.on("connection", (socket) => {
           receiver,
           conversationId,
           timestamp: new Date(),
-          fileUrl,
         });
 
         await newMessage.save();
 
         const receiverSocket = await userModel.findOne({ username: receiver });
-        if (receiverSocket) {
+        if (receiverSocket?.socketId) {
           io.to(receiverSocket.socketId).emit("chat-message", newMessage);
         }
       } catch (error) {
@@ -196,18 +177,43 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", async () => {
-    await userModel.findOneAndUpdate(
-      { socketId: socket.id },
-      { onlineStatus: false },
-      { new: true }
-    );
+    try {
+      await userModel.findOneAndUpdate(
+        { socketId: socket.id },
+        { onlineStatus: false },
+        { new: true }
+      );
+      console.log("Client disconnected:", socket.id);
+    } catch (error) {
+      console.error("Error updating user status on disconnect:", error);
+    }
   });
 });
 
-server
-  .listen(port, () => {
-    console.log("Server listening on port " + port);
-  })
-  .on("error", (err) => {
-    console.error("Server failed to start:", err);
-  });
+// Create API endpoint for Socket.IO
+app.post("/api/socket", (req, res) => {
+  try {
+    if (io) {
+      io.emit(req.body.event, req.body.data);
+      res.status(200).json({ message: "Event emitted successfully" });
+    } else {
+      res.status(500).json({ message: "Socket.IO not initialized" });
+    }
+  } catch (error) {
+    console.error("Error emitting socket event:", error);
+    res.status(500).json({ message: "Failed to emit event" });
+  }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: "Something went wrong!" });
+});
+
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
+export default app;
